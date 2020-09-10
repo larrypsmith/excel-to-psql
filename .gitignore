@@ -130,3 +130,5 @@ dmypy.json
 
 # Student data spreadsheets
 fwddata/
+
+.DS_Store
