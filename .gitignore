@@ -132,3 +132,4 @@ dmypy.json
 fwddata/
 
 .DS_Store
+.vscode
