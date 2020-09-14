@@ -2,17 +2,17 @@ import openpyxl
 import psycopg2
 
 # Local development
-# CONNECTION_PARAMETERS = {
-#   'host': 'postgres',
-#   'dbname': 'postgres',
-#   'user': 'postgres',
-#   'password': 'postgrespassword',
-#   'port': '5432'
-# }
+CONNECTION_PARAMETERS = {
+  'dbname': 'postgres',
+  'user': 'postgres',
+  'password': 'postgrespassword',
+  'host': 'localhost',
+  'port': '5432'
+}
 
-# with psycopg2.connect(**CONNECTION_PARAMETERS) as conn:
-#   with conn.cursor() as curs:
-#     print(curs.execute('SELECT * FROM INFORMATION_SCHEMA.TABLES'))
+with psycopg2.connect(**CONNECTION_PARAMETERS) as conn:
+  with conn.cursor() as curs:
+    print(curs.execute('SELECT * FROM admins'))
 
 def get_active_worksheet(path):
   # Open workbook as read-only
@@ -27,7 +27,7 @@ def get_data(ws):
 
   # Generate dict from records
   return [
-    {field_name: value for (field_name, value) in zip(fields, row)}
+    {field: value for (field, value) in zip(fields, row)}
     for row in ws.values
   ]
 
