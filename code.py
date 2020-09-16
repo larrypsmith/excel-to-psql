@@ -11,62 +11,7 @@ CONNECTION_PARAMETERS = {
   'port': '5432'
 }
 
-INSERT_PERSON_SQL = """
-  INSERT INTO Person (id, first_name, last_name, email)
-  VALUES (%s, %s, %s, %s)
-"""
-
-INSERT_HIGHSCHOOL_SQL = """
-  INSERT INTO highschools (id, name, state)
-  VALUES (%s, %s, %s)
-"""
-
-INSERT_COLLEGE_SQL = """
-  INSERT INTO colleges (id, name, city, state)
-  VALUES (%s, %s, %s, %s)
-"""
-
-INSERT_GENDER_SQL = """
-  INSERT INTO genders (type)
-  VALUES (%s)
-"""
-
-INSERT_LABEL_SQL = """
-  INSERT INTO labels (type)
-  VALUES (%s)
-"""
-
-HIGHSCHOOL_FIELDS = [
-  'HighSchoolName',
-  'HighSchoolState'
-]
-
-COLLEGE_FIELDS = [
-  'CollegeName',
-  'CollegeCity',
-  'CollegeState'
-]
-
-GENDER_FIELDS = [
-  'Gender'
-]
-
-LABEL_FIELDS = [
-  'Labels'
-]
-
-DEGREE_TYPE_FIELDS = [
-  'PlannedDegreeType'
-]
-
-def get_active_worksheet(path):
-  # Open workbook as read-only
-  wb = openpyxl.load_workbook(filename=path, data_only=True)
-
-  # Get first worksheet
-  return wb.active
-
-def get_data(ws, *fields):
+def get_all(ws, *fields):
   ans = []
   for row in ws.iter_rows(min_row=2):
     relation = {}
@@ -84,7 +29,6 @@ def get_column_number(ws, field_name):
         return cell.column
   return None
 
-# Iterate across rows
 def get_unique(ws, fields, unique):
   result = []
   uniqs = set()
@@ -115,35 +59,46 @@ def get_unique_labels(ws):
       uniqs.add((label.strip()))
   return list(uniqs)
 
-
-if __name__ == "__main__":
+def main():
   # Open Gradsnapp data
-  ws = get_active_worksheet('fwddata/Gradsnapp Data - Cleaned of Personal Identifable Info (No Phone Email).xlsx')
-
-  highschools = get_unique(ws, fields=HIGHSCHOOL_FIELDS, unique='HighSchoolName')
-  colleges = get_unique(ws, fields=COLLEGE_FIELDS, unique='CollegeName')
-  genders = get_unique(ws, fields=GENDER_FIELDS, unique='Gender')
-  labels = get_unique_labels(ws)
-  degree_types = get_unique(ws, fields=DEGREE_TYPE_FIELDS, unique='PlannedDegreeType')
+  wb = openpyxl.load_workbook(
+    filename='fwddata/Gradsnapp Data - Cleaned of Personal Identifable Info (No Phone Email).xlsx',
+    data_only=True
+  )
+  ws = wb.active
 
   # Connect to DB
   with psycopg2.connect(**CONNECTION_PARAMETERS) as conn:
     with conn.cursor() as cur:
       
-      # insert highschools into Highschools table
+      # insert highschools
+      highschools = get_unique(
+        ws, fields=['HighSchoolName','HighSchoolState'], unique='HighSchoolName'
+      )
       highschool_id = 1
       for highschool in highschools:
-        cur.execute(INSERT_HIGHSCHOOL_SQL, (
+        cur.execute("""
+          INSERT INTO highschools (id, name, state)
+          VALUES (%s, %s, %s)
+        """, (
           highschool_id,
           highschool['HighSchoolName'],
           highschool['HighSchoolState']
         ))
         highschool_id += 1
 
-      # insert colleges into Colleges table
+      # insert colleges
+      colleges = get_unique(
+        ws,
+        fields=['CollegeName','CollegeCity','CollegeState'],
+        unique='CollegeName'
+      )
       college_id = 1
       for college in colleges:
-        cur.execute(INSERT_COLLEGE_SQL, (
+        cur.execute("""
+          INSERT INTO colleges (id, name, city, state)
+          VALUES (%s, %s, %s, %s)
+        """, (
           college_id,
           college['CollegeName'],
           college['CollegeCity'],
@@ -151,20 +106,26 @@ if __name__ == "__main__":
         ))
         college_id += 1 
 
-      # insert genders into Genders tables
+      # insert genders
+      genders = get_unique(ws, fields=['Gender'], unique='Gender')
       for gender in genders:
-        value = gender['Gender']
-        cur.execute(INSERT_GENDER_SQL, (
-          value,
-        ))
+        cur.execute("""
+          INSERT INTO genders (type)
+          VALUES (%s)
+        """, (gender['Gender'],))
 
-      # insert labels into Labels table
+      # insert labels
+      labels = get_unique_labels(ws)
       for label in labels:
-        cur.execute(INSERT_LABEL_SQL, (
-          label,
-        ))
+        cur.execute("""
+          INSERT INTO labels (type)
+          VALUES (%s)
+        """, (label,))
 
-      # insert degree types into DegreeTypes table
+      # insert degree types
+      degree_types = get_unique(
+        ws, fields=['PlannedDegreeType'], unique='PlannedDegreeType'
+      )
       for degree_type in degree_types:
         cur.execute("""
           INSERT INTO degree_types
@@ -172,4 +133,42 @@ if __name__ == "__main__":
         """,
         (degree_type['PlannedDegreeType'],))
 
+      # insert enrollment statuses
+      enrollment_statuses = get_unique(ws, fields=['Status'], unique='Status')
+      for status in enrollment_statuses:
+        cur.execute("""
+          INSERT INTO enrollment_statuses
+          VALUES (%s)
+        """,
+        (status['Status'],))
+
+      # insert registration statuses
+      registration_statuses = get_unique(
+        ws,
+        fields=['RegistrationStatus'],
+        unique='RegistrationStatus'
+      )
+      for reg_status in registration_statuses:
+        cur.execute("""
+          INSERT INTO registration_statuses
+          VALUES (%s)
+        """,
+        (reg_status['RegistrationStatus'],))
+
       # insert students into person table
+      student_persons = get_all(ws, 'FirstName', 'LastName', 'Email')
+      person_id = 1
+      for person in student_persons:
+        cur.execute("""
+          INSERT INTO person (id, first_name, last_name, email)
+          VALUES (%s, %s, %s, %s)
+        """, (
+          person_id,
+          person['FirstName'] or fake.first_name(),
+          person['LastName'] or fake.last_name(),
+          person['Email'] or fake.email()
+        ))
+        person_id += 1
+
+if __name__ == '__main__':
+  main()
