@@ -8,6 +8,7 @@ verify_ssl = true
 [packages]
 openpyxl = "*"
 psycopg2-binary = "*"
+faker = "*"
 
 [requires]
 python_version = "3.8"
