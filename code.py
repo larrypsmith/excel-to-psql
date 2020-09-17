@@ -70,6 +70,26 @@ def main():
   # Connect to DB
   with psycopg2.connect(**CONNECTION_PARAMETERS) as conn:
     with conn.cursor() as cur:
+      students = get_all(
+        ws,
+        'Student Id',
+        'Year',
+        'Status',
+        'FirstName',
+        'LastName',
+        'Gender',
+        'Labels',
+        'Email',
+        'Phone',
+        'AcademicScore',
+        'RegistrationStatus',
+        'PostHsPlans',
+        'Major',
+        'PlannedDegreeType',
+        'ExpectedGraduationYear',
+        'CollegeName',
+        'HighSchoolName'
+      )
       
       # insert highschools
       highschools = get_unique(
@@ -77,15 +97,19 @@ def main():
       )
       highschool_id = 1
       for highschool in highschools:
+        highschool['highschool_id'] = highschool_id
         cur.execute("""
           INSERT INTO highschools (id, name, state)
           VALUES (%s, %s, %s)
         """, (
-          highschool_id,
+          highschool['highschool_id'],
           highschool['HighSchoolName'],
           highschool['HighSchoolState']
         ))
         highschool_id += 1
+        for student in students:
+          if student['HighSchoolName'] == highschool['HighSchoolName']:
+            student['highschool_id'] = highschool['highschool_id']
 
       # insert colleges
       colleges = get_unique(
@@ -95,16 +119,20 @@ def main():
       )
       college_id = 1
       for college in colleges:
+        college['college_id'] = college_id
         cur.execute("""
           INSERT INTO colleges (id, name, city, state)
           VALUES (%s, %s, %s, %s)
         """, (
-          college_id,
+          college['college_id'],
           college['CollegeName'],
           college['CollegeCity'],
           college['CollegeState']
         ))
         college_id += 1 
+        for student in students:
+          if student['CollegeName'] == college['CollegeName']:
+            student['college_id'] = college['college_id']
 
       # insert genders
       genders = get_unique(ws, fields=['Gender'], unique='Gender')
@@ -156,19 +184,141 @@ def main():
         (reg_status['RegistrationStatus'],))
 
       # insert students into person table
-      student_persons = get_all(ws, 'FirstName', 'LastName', 'Email')
       person_id = 1
-      for person in student_persons:
+      for student in students:
+        student['person_id'] = person_id
         cur.execute("""
           INSERT INTO person (id, first_name, last_name, email)
           VALUES (%s, %s, %s, %s)
         """, (
-          person_id,
-          person['FirstName'] or fake.first_name(),
-          person['LastName'] or fake.last_name(),
-          person['Email'] or fake.email()
+          student['person_id'],
+          student['FirstName'] or fake.first_name() + ' (FAKE)',
+          student['LastName'] or fake.last_name() + ' (FAKE)',
+          student['Email'] or fake.email() + ' (FAKE)'
         ))
         person_id += 1
+        
+
+      # insert students into students table
+      for student in students:
+        if student['HighSchoolName'] is None:
+          student['highschool_id'] = None
+        if student['CollegeName'] is None:
+          student['college_id'] = None
+        # handle one student ID that contains a letter
+        if student['Student Id'][0].isalpha():
+          student['Student Id'] = 10000000
+        # convert majors that are empty strings to None
+        if not student['Major']:
+          student['Major'] = None
+        cur.execute("""
+          INSERT INTO students (id, person_id, year, enrollment_status, gender,
+                                phone, highschool_id, college_id,
+                                hs_academic_score, post_hs_plans,
+                                registration_status, major, degree_type,
+                                expected_graduation_year)
+          VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        """, (
+          student['Student Id'],
+          student['person_id'],
+          student['Year'],
+          student['Status'],
+          student['Gender'],
+          student['Phone'],
+          student['highschool_id'],
+          student['college_id'],
+          student['AcademicScore'],
+          student['PostHsPlans'],
+          student['RegistrationStatus'],
+          student['Major'],
+          student['PlannedDegreeType'],
+          student['ExpectedGraduationYear']
+        ))
+
+      # insert student_labels
+      student_label_id = 1
+      for student in students:
+        labels = [label.strip() for label in student['Labels'].split('; ')]
+        for label in labels:
+          cur.execute("""
+            INSERT INTO student_labels (id, student_id, label_type)
+            VALUES (%s, %s, %s)
+          """, (
+            student_label_id,
+            student['Student Id'],
+            label
+          ))
+          student_label_id += 1
+
+      # open interactions worksheet
+      wb = openpyxl.load_workbook(
+        filename='fwddata/PersistEngagementReport_Example.xlsx',
+        data_only=True
+      )
+      ws = wb.active
+
+      # insert interaction_types
+      interaction_types = get_unique(
+        ws,
+        fields=['Interaction Type'],
+        unique='Interaction Type'
+      )
+      for inter_type in interaction_types:
+        cur.execute("""
+          INSERT INTO interaction_types (type)
+          VALUES (%s)
+        """, (inter_type['Interaction Type'],))
+
+      """
+        Interaction content:
+        -- Bulk Email: None
+        -- Bulk Sms: SMS Message
+        -- Sms Received: SMS Message
+        -- Note: Contact Note
+      """
+
+      interactions = get_all(ws, 'System Id', 'Interaction Type',
+                             'Student ID', 'Created Date', 'SMS Message',
+                             'Contact Note')
+                  
+      # set interaction content based on type
+      for interaction in interactions:
+        if interaction['Interaction Type'] == 'Bulk Email':
+          interaction['content'] = None
+        elif interaction['Interaction Type'] == 'Note':
+          interaction['content'] = interaction['Contact Note']
+        else:
+          interaction['content'] = interaction['SMS Message']
+
+      for interaction in interactions:
+          # get person_ids of students in interactions
+          interaction['student_person_id'] = None
+          for student in students:
+            if student['Student Id'] == interaction['Student ID']:
+              interaction['student_person_id'] = student['person_id']
+
+          # set interaction creator and receiver based on type
+          if interaction['Interaction Type'] == 'Sms Recieved':
+            interaction['recipient_id'] = None # will have to be replaced with admin_id
+            interaction['created_by_id'] = interaction['student_person_id']
+          else:
+            interaction['recipient_id'] = interaction['student_person_id']
+            interaction['created_by_id'] = None # will have to be replaced with admin_id
+
+      interaction_id = 1
+      for interaction in interactions:
+        cur.execute("""
+          INSERT INTO interactions (id, interaction_type, created_by_id, recipient_id, date, content)
+          VALUES (%s, %s, %s, %s, %s, %s)
+        """, (
+          interaction_id,
+          interaction['Interaction Type'],
+          interaction['created_by_id'],
+          interaction['recipient_id'],
+          interaction['Created Date'],
+          interaction['content']
+        ))
+        interaction_id += 1
 
 if __name__ == '__main__':
   main()
