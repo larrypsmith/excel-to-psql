@@ -257,6 +257,42 @@ def main():
       )
       ws = wb.active
 
+      # insert admins
+      admins = get_unique(
+        ws,
+        fields=['Created By'],
+        unique='Created By'
+      )
+      # remove NULL admin
+      admins = [admin for admin in admins if admin['Created By']] 
+      admin_id = 1
+      for admin in admins:
+        names = admin['Created By'].split(" ")
+        admin['first_name'] = names[0]
+        admin['last_name'] = names[1]
+        admin['password'] = 'password'
+        admin['person_id'] = person_id
+        admin['id'] = admin_id
+        cur.execute("""
+          INSERT INTO person (id, first_name, last_name, email)
+          VALUES (%s, %s, %s, %s)
+        """, (
+          admin['person_id'],
+          admin['first_name'],
+          admin['last_name'],
+          admin['email'] if 'email' in admin else fake.email() + ' (FAKE)',
+        ))
+        cur.execute("""
+          INSERT INTO admins (id, person_id, password)
+          VALUES (%s, %s, %s)
+        """, (
+          admin['id'],
+          admin['person_id'],
+          admin['password']
+        ))
+        person_id += 1
+        admin_id += 1
+
       # insert interaction_types
       interaction_types = get_unique(
         ws,
