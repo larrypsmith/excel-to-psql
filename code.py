@@ -11,6 +11,23 @@ CONNECTION_PARAMETERS = {
   'port': '5432'
 }
 
+def clear_tables(cur):
+  cur.execute("""
+    DELETE FROM student_labels;
+    DELETE FROM students;
+    DELETE FROM admins;
+    DELETE FROM colleges;
+    DELETE FROM degree_types;
+    DELETE FROM enrollment_statuses;
+    DELETE FROM genders;
+    DELETE FROM highschools;
+    DELETE FROM interactions;
+    DELETE FROM interaction_types;
+    DELETE FROM labels;
+    DELETE FROM person;
+    DELETE FROM registration_statuses;
+  """)
+
 def get_all(ws, *fields):
   ans = []
   for row in ws.iter_rows(min_row=2):
@@ -70,6 +87,8 @@ def main():
   # Connect to DB
   with psycopg2.connect(**CONNECTION_PARAMETERS) as conn:
     with conn.cursor() as cur:
+      clear_tables(cur)
+
       students = get_all(
         ws,
         'Student Id',
@@ -313,9 +332,8 @@ def main():
         -- Note: Contact Note
       """
 
-      interactions = get_all(ws, 'System Id', 'Interaction Type',
-                             'Student ID', 'Created Date', 'SMS Message',
-                             'Contact Note')
+      interactions = get_all(ws, 'Interaction Type', 'Student ID', 'Created By',
+                            'Created Date', 'SMS Message', 'Contact Note')
                   
       # set interaction content based on type
       for interaction in interactions:
@@ -333,13 +351,20 @@ def main():
             if student['Student Id'] == interaction['Student ID']:
               interaction['student_person_id'] = student['person_id']
 
+          get_admin_person_id_query = """
+            SELECT id FROM person
+            WHERE concat(person.first_name, ' ', person.last_name) = (%s)
+          """
+
           # set interaction creator and receiver based on type
-          if interaction['Interaction Type'] == 'Sms Recieved':
-            interaction['recipient_id'] = None # will have to be replaced with admin_id
+          if interaction['Interaction Type'] == 'Sms Received':
+            interaction['recipient_id'] = None # will have to be replaced with admin's person_id
             interaction['created_by_id'] = interaction['student_person_id']
           else:
             interaction['recipient_id'] = interaction['student_person_id']
-            interaction['created_by_id'] = None # will have to be replaced with admin_id
+
+            cur.execute(get_admin_person_id_query, (interaction['Created By'],))
+            interaction['created_by_id'] = cur.fetchone()[0] # will have to be replaced with admin's person_id
 
       interaction_id = 1
       for interaction in interactions:
