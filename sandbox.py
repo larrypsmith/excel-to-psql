@@ -66,7 +66,7 @@ def transfer_students(students, cur):
     res = cur.fetchone()
     student['college_id'] = None if res is None else res[0]
 
-    # change if of student with alpha char
+    # change id of student with alpha char
     if not student['Student Id'].isnumeric():
       student['Student Id'] = 100000000
 
