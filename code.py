@@ -1,5 +1,5 @@
+from psycopg2 import sql, connect
 import openpyxl
-import psycopg2
 from faker import Faker
 fake = Faker()
 
@@ -12,374 +12,292 @@ CONNECTION_PARAMETERS = {
 }
 
 def clear_tables(cur):
-  cur.execute("""
-    DELETE FROM student_labels;
-    DELETE FROM students;
-    DELETE FROM admins;
-    DELETE FROM colleges;
-    DELETE FROM degree_types;
-    DELETE FROM enrollment_statuses;
-    DELETE FROM genders;
-    DELETE FROM highschools;
-    DELETE FROM interactions;
-    DELETE FROM interaction_types;
-    DELETE FROM labels;
-    DELETE FROM person;
+  cur.execute("""DELETE FROM student_labels; DELETE FROM students;
+    DELETE FROM admins; DELETE FROM colleges; DELETE FROM degree_types;
+    DELETE FROM enrollment_statuses; DELETE FROM genders;
+    DELETE FROM highschools; DELETE FROM interactions;
+    DELETE FROM interaction_types; DELETE FROM labels; DELETE FROM person;
     DELETE FROM registration_statuses;
   """)
 
-def get_all(ws, *fields):
-  ans = []
-  for row in ws.iter_rows(min_row=2):
-    relation = {}
-    for cell in row:
-      field = ws.cell(row=1, column=cell.column).value
-      if field in fields:
-        relation[field] = cell.value
-    ans.append(relation)
-  return ans
+def get_types(rows, column_header):
+  types = set()
+  for row in rows:
+    value = row[column_header]
+    if bool(value):
+      types.add(value)
+  return [(t,) for t in types]
 
-def get_column_number(ws, field_name):
-  for row in ws.iter_rows(min_row=1, max_row=1):
-    for cell in row:
-      if cell.value == field_name:
-        return cell.column
-  return None
-
-def get_unique(ws, fields, unique):
-  result = []
+def get(rows, column_headers, unique_header):
   uniqs = set()
-  unique_field_column_number = get_column_number(ws, unique)
+  records = []
+  for row in rows:
+    if row[unique_header] not in uniqs and row[unique_header] is not None:
+      uniqs.add(row[unique_header])
+      records.append({ header: row[header] for header in column_headers})
+  return records
 
-  for row in ws.iter_rows(min_row=2):
-    unique_field_value = ws.cell(row=row[0].row, column=unique_field_column_number).value
-    if (unique_field_value in uniqs or unique_field_value is None):
-      continue
-    record = {}
-    for cell in row:
-      field = ws.cell(row=1, column=cell.column).value
-      if field in fields:
-        record[field] = cell.value
-        if field == unique:
-          uniqs.add(cell.value)
-    result.append(record)
-  
-  return result
+def format_enums(rows, column_names):
+  for row in rows:
+    for col_name in row:
+      if col_name in column_names and row[col_name]:
+        row[col_name] = row[col_name].upper().replace(" ", "_")
 
-def get_unique_labels(ws):
-  uniqs = set()
-  label_col_number = get_column_number(ws, 'Labels')
-  for row in ws.iter_rows(min_row=2, min_col=label_col_number, max_col=label_col_number):
-    cell = row[0]
-    labels = cell.value.split("; ")
+
+def transfer_students(students, cur):
+  person_id = 1
+  label_id = 1
+  for student in students:
+    # insert into person table
+    student['person_id'] = person_id
+    person_id += 1
+    insert(cur, 'person', ['id', 'first_name', 'last_name', 'email'], [(
+      student['person_id'],
+      '(FAKE) ' + fake.first_name(),
+      '(FAKE) ' + fake.last_name(),
+      '(FAKE) ' + fake.email()
+    )])
+    
+    # get highschool_id
+    cur.execute("""
+      SELECT id from highschools
+      WHERE name = %s
+    """, (student['HighSchoolName'],))
+    student['highschool_id'] = cur.fetchone()[0]
+
+    # get college_id
+    cur.execute("""
+      SELECT id from colleges
+      WHERE name = %s
+    """, (student['CollegeName'],))
+    res = cur.fetchone()
+    student['college_id'] = None if res is None else res[0]
+
+    # change id of student with alpha char
+    # if not student['Student Id'].isnumeric():
+    #   student['Student Id'] = 100000000
+
+    # replace whitespace majors with None  
+    if student['Major'] is not None and not student['Major'].strip():
+      student['Major'] = None
+
+    # insert into students table
+    insert(cur, 'students',
+    fields=['id', 'person_id', 'year', 'enrollment_status',
+            'gender', 'phone', 'highschool_id', 'college_id', 'hs_academic_score',
+            'post_hs_plans', 'planned_degree_type', 'registration_status',
+            'major', 'degree_type', 'expected_graduation_year'],
+    values=[[student['Student Id'], student['person_id'], student['Year'],
+            student['Status'], student['Gender'], student['Phone'],
+            student['highschool_id'], student['college_id'],
+            student['AcademicScore'], student['PostHsPlans'],
+            student['PlannedDegreeType'], student['RegistrationStatus'],
+            student['Major'], student['PlannedDegreeType'],
+            student['ExpectedGraduationYear']]]
+    )
+
+    # insert into student_labels table
+    labels = student['Labels'].split('; ')
+    labels = [label.strip() for label in labels]
     for label in labels:
-      uniqs.add((label.strip()))
-  return list(uniqs)
+      insert(cur, 'student_labels', ['id', 'student_id', 'label_type'], [(
+        label_id,
+        student['Student Id'],
+        label
+      )])
+      label_id += 1
 
-def main():
-  # Open Gradsnapp data
+def transfer_admins(interactions, cur):
+  admin_names = get_types(interactions, 'Created By')
+  admins = []
+  for name_tup in admin_names:
+    first_name, last_name = name_tup[0].split(" ")
+    admins.append({
+      'first_name': first_name,
+      'last_name': last_name
+    })
+  add_ids_to(admins)
+  person_id = get_next_id(cur, 'person')
+  for admin in admins:
+    admin['person_id'] = person_id
+    person_id += 1
+    insert(cur, 'person', ['id', 'first_name', 'last_name', 'email'], [(
+      admin['person_id'],
+      admin['first_name'],
+      admin['last_name'],
+      '(FAKE) ' + fake.email()
+    )])
+    insert(cur, 'admins', ['id', 'person_id', 'password'], [(
+      admin['id'],
+      admin['person_id'],
+      'password'
+    )])
+  
+
+def get_next_id(cur, table):
+  query = sql.SQL("""
+    SELECT id
+    FROM {}
+    ORDER BY id DESC
+    LIMIT 1
+  """).format(sql.Identifier(table))
+  cur.execute(query)
+  res = cur.fetchone()
+  return res[0] + 1 if res else 1
+
+def transfer_type(students, cur, column_header, table):
+  types = get_types(students, column_header)
+  insert(cur, table, ['type'], types)
+
+def transfer_labels(students, cur):
+  labels_strings = get_types(students, 'Labels')
+  result = set()
+  for tup in labels_strings:
+    labs = tup[0].split("; ")
+    for lab in labs:
+      result.add(lab.strip())
+  values = [(label,) for label in result]
+  insert(cur, 'labels', ['type'], values)
+
+def insert(cur, table, fields, values):
+  query = sql.SQL("""
+    INSERT INTO {table} ({fields})
+    VALUES ({placeholders})
+  """).format(
+    table=sql.Identifier(table),
+    fields=sql.SQL(", ").join(map(sql.Identifier, fields)),
+    placeholders=sql.SQL(', ').join(sql.Placeholder() * len(fields))
+  )
+  cur.executemany(query, values)
+
+def add_ids_to(records):
+  id = 1
+  for record in records:
+    record['id'] = id
+    id += 1
+  return records
+
+def transfer_no_foreign_keys(rows, cur, column_names, unique_column_name,
+  table, fields):
+  records = get(rows, column_names, unique_column_name)
+  add_ids_to(records)
+  values = [
+    (record['id'],) + tuple(record[col_name] for col_name in column_names)
+    for record in records
+  ]
+  insert(cur, table, fields, values)
+
+def get_data_from_wb(wb_path):
   wb = openpyxl.load_workbook(
-    filename='fwddata/Gradsnapp Data - Cleaned of Personal Identifable Info (No Phone Email).xlsx',
+    filename=wb_path,
     data_only=True
   )
   ws = wb.active
 
-  # Connect to DB
-  with psycopg2.connect(**CONNECTION_PARAMETERS) as conn:
-    with conn.cursor() as cur:
-      clear_tables(cur)
+  # build list of objects
+  headers = [cell.value for cell in ws['1']]
+  return [
+    {attribute: cell.value for attribute, cell in zip(headers, row)}
+    for row in ws.iter_rows(min_row=2)
+  ]
 
-      students = get_all(
-        ws,
-        'Student Id',
-        'Year',
-        'Status',
-        'FirstName',
-        'LastName',
-        'Gender',
-        'Labels',
-        'Email',
-        'Phone',
-        'AcademicScore',
-        'RegistrationStatus',
-        'PostHsPlans',
-        'Major',
-        'PlannedDegreeType',
-        'ExpectedGraduationYear',
-        'CollegeName',
-        'HighSchoolName'
-      )
-      
-      # insert highschools
-      highschools = get_unique(
-        ws, fields=['HighSchoolName','HighSchoolState'], unique='HighSchoolName'
-      )
-      highschool_id = 1
-      for highschool in highschools:
-        highschool['highschool_id'] = highschool_id
-        cur.execute("""
-          INSERT INTO highschools (id, name, state)
-          VALUES (%s, %s, %s)
-        """, (
-          highschool['highschool_id'],
-          highschool['HighSchoolName'],
-          highschool['HighSchoolState']
-        ))
-        highschool_id += 1
-        for student in students:
-          if student['HighSchoolName'] == highschool['HighSchoolName']:
-            student['highschool_id'] = highschool['highschool_id']
+def get_admin_id(cur, name):
+  query = """
+    SELECT id FROM person
+    WHERE concat(person.first_name, ' ', person.last_name) = (%s)
+  """
+  cur.execute(query, (name,))
+  res = cur.fetchone()
+  if res:
+    return res[0]
+  raise Exception(f"Couldn't find {name} in person table")
 
-      # insert colleges
-      colleges = get_unique(
-        ws,
-        fields=['CollegeName','CollegeCity','CollegeState'],
-        unique='CollegeName'
-      )
-      college_id = 1
-      for college in colleges:
-        college['college_id'] = college_id
-        cur.execute("""
-          INSERT INTO colleges (id, name, city, state)
-          VALUES (%s, %s, %s, %s)
-        """, (
-          college['college_id'],
-          college['CollegeName'],
-          college['CollegeCity'],
-          college['CollegeState']
-        ))
-        college_id += 1 
-        for student in students:
-          if student['CollegeName'] == college['CollegeName']:
-            student['college_id'] = college['college_id']
+def get_person_id(cur, student_id):
+  query = """
+    SELECT person_id FROM students
+    WHERE id = %s
+  """
+  cur.execute(query, (student_id,))
+  res = cur.fetchone()
+  return res[0] if res else None
 
-      # insert genders
-      genders = get_unique(ws, fields=['Gender'], unique='Gender')
-      for gender in genders:
-        cur.execute("""
-          INSERT INTO genders (type)
-          VALUES (%s)
-        """, (gender['Gender'],))
+def transfer_interactions(interactions, cur):
+  for interaction in interactions:
+    admin_name = interaction['Created By']
+    # if not interaction['Student ID'].isnumeric():
+    #   interaction['Student ID'] = 100000000
+    if admin_name:
+      interaction['created_by_id'] = get_admin_id(cur, admin_name)
+      interaction['recipient_id'] = get_person_id(cur, interaction['Student ID'])
+    else:
+      interaction['created_by_id'] = get_person_id(cur, interaction['Student ID'])
+      interaction['recipient_id'] = None
+    
+    if interaction['Interaction Type'] == 'Bulk Email':
+      interaction['content'] = None
+    elif interaction['Interaction Type'] == 'Note':
+      interaction['content'] = interaction['Contact Note']
+    else:
+      interaction['content'] = interaction['SMS Message']
 
-      # insert labels
-      labels = get_unique_labels(ws)
-      for label in labels:
-        cur.execute("""
-          INSERT INTO labels (type)
-          VALUES (%s)
-        """, (label,))
+  add_ids_to(interactions)
 
-      # insert degree types
-      degree_types = get_unique(
-        ws, fields=['PlannedDegreeType'], unique='PlannedDegreeType'
-      )
-      for degree_type in degree_types:
-        cur.execute("""
-          INSERT INTO degree_types
-          VALUES (%s)
-        """,
-        (degree_type['PlannedDegreeType'],))
-
-      # insert enrollment statuses
-      enrollment_statuses = get_unique(ws, fields=['Status'], unique='Status')
-      for status in enrollment_statuses:
-        cur.execute("""
-          INSERT INTO enrollment_statuses
-          VALUES (%s)
-        """,
-        (status['Status'],))
-
-      # insert registration statuses
-      registration_statuses = get_unique(
-        ws,
-        fields=['RegistrationStatus'],
-        unique='RegistrationStatus'
-      )
-      for reg_status in registration_statuses:
-        cur.execute("""
-          INSERT INTO registration_statuses
-          VALUES (%s)
-        """,
-        (reg_status['RegistrationStatus'],))
-
-      # insert students into person table
-      person_id = 1
-      for student in students:
-        student['person_id'] = person_id
-        cur.execute("""
-          INSERT INTO person (id, first_name, last_name, email)
-          VALUES (%s, %s, %s, %s)
-        """, (
-          student['person_id'],
-          student['FirstName'] or fake.first_name() + ' (FAKE)',
-          student['LastName'] or fake.last_name() + ' (FAKE)',
-          student['Email'] or fake.email() + ' (FAKE)'
-        ))
-        person_id += 1
-        
-
-      # insert students into students table
-      for student in students:
-        if student['HighSchoolName'] is None:
-          student['highschool_id'] = None
-        if student['CollegeName'] is None:
-          student['college_id'] = None
-        # handle one student ID that contains a letter
-        if student['Student Id'][0].isalpha():
-          student['Student Id'] = 10000000
-        # convert majors that are empty strings to None
-        if not student['Major']:
-          student['Major'] = None
-        cur.execute("""
-          INSERT INTO students (id, person_id, year, enrollment_status, gender,
-                                phone, highschool_id, college_id,
-                                hs_academic_score, post_hs_plans,
-                                registration_status, major, degree_type,
-                                expected_graduation_year)
-          VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-        """, (
-          student['Student Id'],
-          student['person_id'],
-          student['Year'],
-          student['Status'],
-          student['Gender'],
-          student['Phone'],
-          student['highschool_id'],
-          student['college_id'],
-          student['AcademicScore'],
-          student['PostHsPlans'],
-          student['RegistrationStatus'],
-          student['Major'],
-          student['PlannedDegreeType'],
-          student['ExpectedGraduationYear']
-        ))
-
-      # insert student_labels
-      student_label_id = 1
-      for student in students:
-        labels = [label.strip() for label in student['Labels'].split('; ')]
-        for label in labels:
-          cur.execute("""
-            INSERT INTO student_labels (id, student_id, label_type)
-            VALUES (%s, %s, %s)
-          """, (
-            student_label_id,
-            student['Student Id'],
-            label
-          ))
-          student_label_id += 1
-
-      # open interactions worksheet
-      wb = openpyxl.load_workbook(
-        filename='fwddata/PersistEngagementReport_Example.xlsx',
-        data_only=True
-      )
-      ws = wb.active
-
-      # insert admins
-      admins = get_unique(
-        ws,
-        fields=['Created By'],
-        unique='Created By'
-      )
-      # remove NULL admin
-      admins = [admin for admin in admins if admin['Created By']] 
-      admin_id = 1
-      for admin in admins:
-        names = admin['Created By'].split(" ")
-        admin['first_name'] = names[0]
-        admin['last_name'] = names[1]
-        admin['password'] = 'password'
-        admin['person_id'] = person_id
-        admin['id'] = admin_id
-        cur.execute("""
-          INSERT INTO person (id, first_name, last_name, email)
-          VALUES (%s, %s, %s, %s)
-        """, (
-          admin['person_id'],
-          admin['first_name'],
-          admin['last_name'],
-          admin['email'] if 'email' in admin else fake.email() + ' (FAKE)',
-        ))
-        cur.execute("""
-          INSERT INTO admins (id, person_id, password)
-          VALUES (%s, %s, %s)
-        """, (
-          admin['id'],
-          admin['person_id'],
-          admin['password']
-        ))
-        person_id += 1
-        admin_id += 1
-
-      # insert interaction_types
-      interaction_types = get_unique(
-        ws,
-        fields=['Interaction Type'],
-        unique='Interaction Type'
-      )
-      for inter_type in interaction_types:
-        cur.execute("""
-          INSERT INTO interaction_types (type)
-          VALUES (%s)
-        """, (inter_type['Interaction Type'],))
-
-      """
-        Interaction content:
-        -- Bulk Email: None
-        -- Bulk Sms: SMS Message
-        -- Sms Received: SMS Message
-        -- Note: Contact Note
-      """
-
-      interactions = get_all(ws, 'Interaction Type', 'Student ID', 'Created By',
-                            'Created Date', 'SMS Message', 'Contact Note')
-                  
-      # set interaction content based on type
-      for interaction in interactions:
-        if interaction['Interaction Type'] == 'Bulk Email':
-          interaction['content'] = None
-        elif interaction['Interaction Type'] == 'Note':
-          interaction['content'] = interaction['Contact Note']
-        else:
-          interaction['content'] = interaction['SMS Message']
-
-      for interaction in interactions:
-          # get person_ids of students in interactions
-          interaction['student_person_id'] = None
-          for student in students:
-            if student['Student Id'] == interaction['Student ID']:
-              interaction['student_person_id'] = student['person_id']
-
-          get_admin_person_id_query = """
-            SELECT id FROM person
-            WHERE concat(person.first_name, ' ', person.last_name) = (%s)
-          """
-
-          # set interaction creator and receiver based on type
-          if interaction['Interaction Type'] == 'Sms Received':
-            interaction['recipient_id'] = None # will have to be replaced with admin's person_id
-            interaction['created_by_id'] = interaction['student_person_id']
-          else:
-            interaction['recipient_id'] = interaction['student_person_id']
-
-            cur.execute(get_admin_person_id_query, (interaction['Created By'],))
-            interaction['created_by_id'] = cur.fetchone()[0] # will have to be replaced with admin's person_id
-
-      interaction_id = 1
-      for interaction in interactions:
-        cur.execute("""
-          INSERT INTO interactions (id, interaction_type, created_by_id, recipient_id, date, content)
-          VALUES (%s, %s, %s, %s, %s, %s)
-        """, (
-          interaction_id,
-          interaction['Interaction Type'],
-          interaction['created_by_id'],
-          interaction['recipient_id'],
-          interaction['Created Date'],
-          interaction['content']
-        ))
-        interaction_id += 1
+  for interaction in interactions:
+    insert(cur, 'interactions', 
+    ['id', 'interaction_type', 'created_by_id', 'recipient_id', 'date', 'content'],
+    [(
+      interaction['id'],
+      interaction['Interaction Type'],
+      interaction['created_by_id'],
+      interaction['recipient_id'],
+      interaction['Created Date'],
+      interaction['content']
+    )])
 
 if __name__ == '__main__':
-  main()
+  # get data from Excel workbooks
+  students = get_data_from_wb(
+    'fwddata/Gradsnapp Data - Cleaned of Personal Identifable Info (No Phone Email).xlsx')
+  format_enums(students,
+    ['PlannedDegreeType', 'Gender', 'Status', 'RegistrationStatus'])
+
+  interactions = get_data_from_wb(
+    'fwddata/PersistEngagementReport_Example.xlsx')
+  format_enums(interactions, ['Interaction Type'])
+
+  # connect to postgres db
+  with connect(**CONNECTION_PARAMETERS) as conn:
+    with conn.cursor() as cur:
+      clear_tables(cur)
+      
+      # Insert all tables who have only a 'type' column
+      transfer_type(students, cur, 'Gender', 'genders')
+      transfer_type(students, cur, 'Status', 'enrollment_statuses')
+      transfer_type(students, cur, 'PlannedDegreeType', 'degree_types')
+      transfer_type(students, cur, 'RegistrationStatus', 'registration_statuses')
+      transfer_labels(students, cur)
+
+      # Insert tables that don't have foreign keys
+      transfer_no_foreign_keys(students, cur, 
+        column_names=['HighSchoolName', 'HighSchoolState'],
+        unique_column_name='HighSchoolName',
+        table='highschools',
+        fields=['id', 'name', 'state'])
+      transfer_no_foreign_keys(students, cur, 
+        column_names=['CollegeName', 'CollegeCity', 'CollegeState', 'CollegeType'],
+        unique_column_name='CollegeName',
+        table='colleges',
+        fields=['id', 'name', 'city', 'state', 'type'])
+
+      # Insert students 
+      transfer_students(students, cur)
+
+      # Insert admins
+      transfer_admins(interactions, cur)
+
+      # Insert interaction types
+      transfer_type(interactions, cur, 'Interaction Type', 'interaction_types')
+
+      # Insert interactions
+      transfer_interactions(interactions, cur)
+      
