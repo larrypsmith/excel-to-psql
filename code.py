@@ -1,3 +1,4 @@
+import uuid
 from psycopg2 import sql, connect
 import openpyxl
 from faker import Faker
@@ -45,17 +46,14 @@ def format_enums(rows, column_names):
 
 
 def transfer_students(students, cur):
-  person_id = 1
-  label_id = 1
   for student in students:
     # insert into person table
-    student['person_id'] = person_id
-    person_id += 1
+    student['person_id'] = str(uuid.uuid4())
     insert(cur, 'person', ['id', 'first_name', 'last_name', 'email'], [(
       student['person_id'],
-      '(FAKE) ' + fake.first_name(),
-      '(FAKE) ' + fake.last_name(),
-      '(FAKE) ' + fake.email()
+      fake.first_name(),
+      fake.last_name(),
+      fake.email()
     )])
     
     # get highschool_id
@@ -72,10 +70,6 @@ def transfer_students(students, cur):
     """, (student['CollegeName'],))
     res = cur.fetchone()
     student['college_id'] = None if res is None else res[0]
-
-    # change id of student with alpha char
-    # if not student['Student Id'].isnumeric():
-    #   student['Student Id'] = 100000000
 
     # replace whitespace majors with None  
     if student['Major'] is not None and not student['Major'].strip():
@@ -101,11 +95,10 @@ def transfer_students(students, cur):
     labels = [label.strip() for label in labels]
     for label in labels:
       insert(cur, 'student_labels', ['id', 'student_id', 'label_type'], [(
-        label_id,
+        str(uuid.uuid4()),
         student['Student Id'],
         label
       )])
-      label_id += 1
 
 def transfer_admins(interactions, cur):
   admin_names = get_types(interactions, 'Created By')
@@ -116,19 +109,20 @@ def transfer_admins(interactions, cur):
       'first_name': first_name,
       'last_name': last_name
     })
-  add_ids_to(admins)
-  person_id = get_next_id(cur, 'person')
+
+  # add_ids_to(admins)
+  # person_id = get_next_id(cur, 'person')
   for admin in admins:
-    admin['person_id'] = person_id
-    person_id += 1
+    admin['person_id'] = str(uuid.uuid4())
+    # person_id += 1
     insert(cur, 'person', ['id', 'first_name', 'last_name', 'email'], [(
       admin['person_id'],
       admin['first_name'],
       admin['last_name'],
-      '(FAKE) ' + fake.email()
+      fake.email()
     )])
     insert(cur, 'admins', ['id', 'person_id', 'password'], [(
-      admin['id'],
+      str(uuid.uuid4()),
       admin['person_id'],
       'password'
     )])
@@ -145,8 +139,8 @@ def get_next_id(cur, table):
   res = cur.fetchone()
   return res[0] + 1 if res else 1
 
-def transfer_type(students, cur, column_header, table):
-  types = get_types(students, column_header)
+def transfer_type(data, cur, column_header, table):
+  types = get_types(data, column_header)
   insert(cur, table, ['type'], types)
 
 def transfer_labels(students, cur):
@@ -170,19 +164,18 @@ def insert(cur, table, fields, values):
   )
   cur.executemany(query, values)
 
-def add_ids_to(records):
-  id = 1
-  for record in records:
-    record['id'] = id
-    id += 1
-  return records
+# def add_ids_to(records):
+#   id = 1
+#   for record in records:
+#     record['id'] = id
+#     id += 1
+#   return records
 
 def transfer_no_foreign_keys(rows, cur, column_names, unique_column_name,
   table, fields):
   records = get(rows, column_names, unique_column_name)
-  add_ids_to(records)
   values = [
-    (record['id'],) + tuple(record[col_name] for col_name in column_names)
+    tuple(record[col_name] for col_name in column_names)
     for record in records
   ]
   insert(cur, table, fields, values)
@@ -224,8 +217,6 @@ def get_person_id(cur, student_id):
 def transfer_interactions(interactions, cur):
   for interaction in interactions:
     admin_name = interaction['Created By']
-    # if not interaction['Student ID'].isnumeric():
-    #   interaction['Student ID'] = 100000000
     if admin_name:
       interaction['created_by_id'] = get_admin_id(cur, admin_name)
       interaction['recipient_id'] = get_person_id(cur, interaction['Student ID'])
@@ -240,13 +231,14 @@ def transfer_interactions(interactions, cur):
     else:
       interaction['content'] = interaction['SMS Message']
 
-  add_ids_to(interactions)
+  # add_ids_to(interactions)
 
   for interaction in interactions:
     insert(cur, 'interactions', 
-    ['id', 'interaction_type', 'created_by_id', 'recipient_id', 'date', 'content'],
+    # ['id', 'interaction_type', 'created_by_id', 'recipient_id', 'date', 'content'],
+    ['interaction_type', 'created_by_id', 'recipient_id', 'date', 'content'],
     [(
-      interaction['id'],
+      # interaction['id'],
       interaction['Interaction Type'],
       interaction['created_by_id'],
       interaction['recipient_id'],
@@ -282,12 +274,12 @@ if __name__ == '__main__':
         column_names=['HighSchoolName', 'HighSchoolState'],
         unique_column_name='HighSchoolName',
         table='highschools',
-        fields=['id', 'name', 'state'])
+        fields=['name', 'state'])
       transfer_no_foreign_keys(students, cur, 
         column_names=['CollegeName', 'CollegeCity', 'CollegeState', 'CollegeType'],
         unique_column_name='CollegeName',
         table='colleges',
-        fields=['id', 'name', 'city', 'state', 'type'])
+        fields=['name', 'city', 'state', 'type'])
 
       # Insert students 
       transfer_students(students, cur)
